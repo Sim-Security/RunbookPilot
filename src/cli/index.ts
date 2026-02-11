@@ -6,6 +6,8 @@ import { parse as parseYaml } from 'yaml';
 
 import { loadPlaybook } from '../engine/playbook-loader.ts';
 import { PlaybookMatcher } from '../engine/playbook-matcher.ts';
+import { registerQueueCommands } from './queue-commands.ts';
+import { registerMetricsCommands } from './metrics-commands.ts';
 
 import type { Runbook, RunbookStep } from '../types/playbook.ts';
 
@@ -62,12 +64,53 @@ program
 // list command
 program
   .command('list')
-  .description('List available playbooks')
+  .description('List available playbooks with metadata')
   .option('-f, --format <format>', 'Output format (table, json)', 'table')
+  .option('-d, --directory <dir>', 'Playbooks directory', 'playbooks')
   .action(async (options: Record<string, string>) => {
-    console.log(`Listing playbooks (format: ${options['format']})`);
-    // Placeholder — S4 implements playbook library
-    console.log('Playbook library not yet implemented (coming in S4)');
+    const playbooksDir = options['directory'] ?? 'playbooks';
+    const yamlFiles = collectYamlFiles(playbooksDir);
+    const playbooks: SearchablePlaybook[] = [];
+
+    for (const filePath of yamlFiles) {
+      const pb = parseForSearch(filePath);
+      if (pb) playbooks.push(pb);
+    }
+
+    if (playbooks.length === 0) {
+      console.log('No playbooks found.');
+      return;
+    }
+
+    if (options['format'] === 'json') {
+      console.log(JSON.stringify(playbooks, null, 2));
+      return;
+    }
+
+    // Table format with metadata
+    console.log('');
+    console.log('Available Playbooks');
+    console.log('='.repeat(90));
+    console.log('');
+    console.log(
+      '  ' +
+      'Name'.padEnd(35) +
+      'Level'.padEnd(8) +
+      'Techniques'.padEnd(25) +
+      'Tags',
+    );
+    console.log('  ' + '-'.repeat(86));
+
+    for (const pb of playbooks) {
+      const name = (pb.name || '(unnamed)').slice(0, 33);
+      const level = pb.automationLevel.padEnd(8);
+      const techniques = (pb.mitreTechniques.join(', ') || 'none').slice(0, 23);
+      const tags = pb.tags.join(', ') || '';
+      console.log(`  ${name.padEnd(35)}${level}${techniques.padEnd(25)}${tags}`);
+    }
+
+    console.log('');
+    console.log(`Total: ${playbooks.length} playbook(s)`);
   });
 
 // ---------------------------------------------------------------------------
@@ -341,5 +384,9 @@ program
       console.log(`Found ${matcherResults.length} mapped playbook(s) via technique matcher.`);
     }
   });
+
+// Register subcommand modules
+registerQueueCommands(program);
+registerMetricsCommands(program);
 
 program.parse();

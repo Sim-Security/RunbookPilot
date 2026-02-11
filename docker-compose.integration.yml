@@ -1,0 +1,50 @@
+# Docker Compose: DetectForge + RunbookPilot Integration Demo (S4-007)
+#
+# Usage:
+#   docker-compose -f docker-compose.integration.yml up
+#
+# This starts RunbookPilot with a webhook receiver listening for alerts.
+# DetectForge can be configured to send alerts to http://runbookpilot:3000/api/v1/alerts
+
+version: '3.8'
+
+services:
+  runbookpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: runbookpilot
+    ports:
+      - "3000:3000"
+    environment:
+      - LOG_LEVEL=info
+      - SERVER_PORT=3000
+      - SERVER_HOST=0.0.0.0
+      - AUTOMATION_LEVEL=L0
+      - RUNBOOKPILOT_DB_PATH=/data/runbookpilot.db
+    volumes:
+      - runbookpilot-data:/data
+      - ./playbooks:/app/playbooks:ro
+      - ./config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # Uncomment when DetectForge is available locally:
+  # detectforge:
+  #   image: detectforge:latest
+  #   container_name: detectforge
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     - WEBHOOK_URL=http://runbookpilot:3000/api/v1/alerts
+  #   depends_on:
+  #     runbookpilot:
+  #       condition: service_healthy
+
+volumes:
+  runbookpilot-data:

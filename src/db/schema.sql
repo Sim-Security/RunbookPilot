@@ -159,3 +159,10 @@ CREATE TABLE IF NOT EXISTS detectforge_mappings (
 
 CREATE INDEX IF NOT EXISTS idx_detectforge_technique ON detectforge_mappings(mitre_technique);
 CREATE INDEX IF NOT EXISTS idx_detectforge_runbook ON detectforge_mappings(runbook_id);
+
+-- Performance indexes for metrics queries (S5-010)
+CREATE INDEX IF NOT EXISTS idx_executions_state_started ON executions(state, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_executions_runbook_started ON executions(runbook_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approval_status_requested ON approval_queue(status, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_step_results_exec_success ON step_results(execution_id, success);
+CREATE INDEX IF NOT EXISTS idx_audit_exec_event ON audit_log(execution_id, event_type);
