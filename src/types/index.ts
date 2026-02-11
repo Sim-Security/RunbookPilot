@@ -72,3 +72,41 @@ export type {
   // Top-level alert event
   AlertEvent,
 } from './ecs.ts';
+
+export type {
+  // Simulation context & steps
+  SimulationContext,
+  SimulatedStep,
+
+  // Impact assessment
+  RiskLevel,
+  ImpactAssessment,
+  BlastRadius,
+
+  // Simulation report
+  SimulationReport,
+  RollbackPlan,
+  RollbackStep,
+
+  // Confidence scoring
+  ConfidenceBreakdown,
+  ConfidenceDisplay,
+
+  // Approval queue
+  ApprovalQueueEntry,
+  CreateApprovalOptions,
+  ListApprovalOptions,
+
+  // Accuracy
+  AccuracyReport,
+  StepDifference,
+
+  // Simulation metrics
+  SimulationMetricsRecord,
+
+  // Policy enforcement
+  AutomationPolicy,
+  PolicyRule,
+  PolicyCheckResult,
+  PolicyViolation,
+} from './simulation.ts';

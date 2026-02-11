@@ -38,7 +38,14 @@ export type AuditEventType =
   | 'rollback_started'
   | 'rollback_completed'
   | 'rollback_failed'
-  | 'state_changed';
+  | 'state_changed'
+  // L2 simulation events
+  | 'simulation_started'
+  | 'simulation_completed'
+  | 'simulation_failed'
+  | 'step_simulated'
+  | 'approval_queue_created'
+  | 'approval_queue_executed';
 
 /**
  * Represents a row returned from the audit_log table.
@@ -285,6 +292,81 @@ export class AuditLogger {
   ): void {
     this.writeEntry(executionId, runbookId, 'rollback_failed', 'system', {
       error,
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Simulation events (L2)
+  // -----------------------------------------------------------------------
+
+  logSimulationStarted(
+    executionId: string,
+    runbookId: string,
+    details?: Record<string, unknown>,
+  ): void {
+    this.writeEntry(executionId, runbookId, 'simulation_started', 'system', {
+      ...details,
+    });
+  }
+
+  logSimulationCompleted(
+    executionId: string,
+    runbookId: string,
+    details?: Record<string, unknown>,
+  ): void {
+    this.writeEntry(executionId, runbookId, 'simulation_completed', 'system', {
+      ...details,
+    });
+  }
+
+  logSimulationFailed(
+    executionId: string,
+    runbookId: string,
+    error: string,
+    details?: Record<string, unknown>,
+  ): void {
+    this.writeEntry(executionId, runbookId, 'simulation_failed', 'system', {
+      error,
+      ...details,
+    });
+  }
+
+  logStepSimulated(
+    executionId: string,
+    runbookId: string,
+    stepId: string,
+    action: string,
+    details?: Record<string, unknown>,
+  ): void {
+    this.writeEntry(executionId, runbookId, 'step_simulated', 'system', {
+      step_id: stepId,
+      action,
+      ...details,
+    });
+  }
+
+  logApprovalQueueCreated(
+    executionId: string,
+    runbookId: string,
+    requestId: string,
+    details?: Record<string, unknown>,
+  ): void {
+    this.writeEntry(executionId, runbookId, 'approval_queue_created', 'system', {
+      request_id: requestId,
+      ...details,
+    });
+  }
+
+  logApprovalQueueExecuted(
+    executionId: string,
+    runbookId: string,
+    requestId: string,
+    approver: string,
+    details?: Record<string, unknown>,
+  ): void {
+    this.writeEntry(executionId, runbookId, 'approval_queue_executed', approver, {
+      request_id: requestId,
+      ...details,
     });
   }
 
