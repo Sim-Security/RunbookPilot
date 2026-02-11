@@ -71,7 +71,7 @@ const DEFAULTS: AppConfig = {
       quality: 'anthropic/claude-3-opus',
     },
     timeout: 30_000,
-    maxTokens: 4096,
+    maxTokens: 200_000,
     temperature: 0.1,
     retries: 3,
   },

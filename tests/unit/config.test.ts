@@ -71,7 +71,7 @@ describe('Configuration System', () => {
       expect(config.openRouter.models.standard).toBe('anthropic/claude-3.5-sonnet');
       expect(config.openRouter.models.quality).toBe('anthropic/claude-3-opus');
       expect(config.openRouter.timeout).toBe(30_000);
-      expect(config.openRouter.maxTokens).toBe(4096);
+      expect(config.openRouter.maxTokens).toBe(200_000);
       expect(config.openRouter.temperature).toBe(0.1);
       expect(config.openRouter.retries).toBe(3);
 

@@ -36,10 +36,8 @@ CREATE TABLE IF NOT EXISTS executions (
     'executing', 'rolling_back', 'completed', 'failed', 'cancelled'
   )),
   mode TEXT NOT NULL CHECK(mode IN ('production', 'simulation', 'dry-run')),
-  success BOOLEAN,
-  alert_data TEXT,
-  context_data TEXT,
-  result_data TEXT,
+  context_snapshot TEXT,
+  error TEXT,
   started_at TEXT NOT NULL,
   completed_at TEXT,
   duration_ms INTEGER,
@@ -50,7 +48,7 @@ CREATE TABLE IF NOT EXISTS executions (
 CREATE INDEX IF NOT EXISTS idx_executions_runbook ON executions(runbook_id);
 CREATE INDEX IF NOT EXISTS idx_executions_state ON executions(state);
 CREATE INDEX IF NOT EXISTS idx_executions_started ON executions(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_executions_success ON executions(success);
+CREATE INDEX IF NOT EXISTS idx_executions_mode ON executions(mode);
 
 -- Step execution results
 CREATE TABLE IF NOT EXISTS step_results (
@@ -59,11 +57,9 @@ CREATE TABLE IF NOT EXISTS step_results (
   step_id TEXT NOT NULL,
   step_name TEXT NOT NULL,
   action TEXT NOT NULL,
-  executor TEXT NOT NULL,
-  success BOOLEAN NOT NULL,
-  output_data TEXT,
-  error_data TEXT,
-  rolled_back BOOLEAN DEFAULT FALSE,
+  success INTEGER NOT NULL,
+  output TEXT,
+  error TEXT,
   started_at TEXT NOT NULL,
   completed_at TEXT NOT NULL,
   duration_ms INTEGER NOT NULL,
