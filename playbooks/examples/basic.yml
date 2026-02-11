@@ -1,0 +1,191 @@
+# RunbookPilot Example Playbook: L0 Phishing Email Investigation
+# Schema Version: 1.0
+# Automation Level: L0 (Manual - Recommendation Only)
+#
+# This playbook provides a step-by-step investigation workflow for
+# suspected phishing emails detected via SIEM correlation or manual
+# analyst submission. At L0, all steps are presented as recommendations
+# for the analyst to execute manually.
+#
+# MITRE ATT&CK: T1566.001 - Spearphishing Attachment
+# Reference: https://attack.mitre.org/techniques/T1566/001/
+
+runbook:
+  id: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+  version: "1.0"
+
+  metadata:
+    name: "T1566.001 - Phishing Email Investigation"
+    description: >
+      Initial triage playbook for suspected phishing emails with attachment
+      analysis. Collects email metadata, enriches the sender domain against
+      threat intelligence feeds, performs static analysis on attachments,
+      and creates an investigation ticket with consolidated findings.
+      Designed for L0 manual execution with analyst-driven investigation.
+    author: "security-team@example.com"
+    created: "2026-02-11T00:00:00Z"
+    updated: "2026-02-11T00:00:00Z"
+    tags:
+      - "phishing"
+      - "email"
+      - "initial-access"
+      - "triage"
+      - "attachments"
+    references:
+      - "https://attack.mitre.org/techniques/T1566/001/"
+      - "https://www.cisa.gov/news-events/news/avoiding-social-engineering-and-phishing-attacks"
+
+  triggers:
+    detection_sources:
+      - "siem_correlation"
+      - "manual"
+    mitre_techniques:
+      - "T1566.001"
+    platforms:
+      - "saas"
+    severity:
+      - "medium"
+      - "high"
+      - "critical"
+
+  config:
+    automation_level: "L0"
+    max_execution_time: 300
+    requires_approval: false
+
+  steps:
+    # Step 1: Collect the raw email metadata from the email gateway.
+    # This is the foundational step -- all subsequent steps depend on
+    # its output. If this fails, the investigation cannot proceed.
+    - id: "step-01"
+      name: "Collect Email Metadata"
+      description: >
+        Retrieve full email metadata from the email gateway including
+        sender address, recipient list, subject line, headers (SPF, DKIM,
+        DMARC results), and attachment manifest. This data forms the basis
+        for all downstream enrichment and analysis.
+      action: "collect_logs"
+      executor: "email_gateway"
+      parameters:
+        message_id: "{{ alert.email.message_id }}"
+        fields:
+          - "sender"
+          - "recipients"
+          - "subject"
+          - "headers"
+          - "attachments"
+          - "received_timestamps"
+        include_raw_headers: true
+      on_error: "halt"
+      timeout: 30
+
+    # Step 2: Enrich the sender's domain against threat intelligence.
+    # Runs after step-01 so we have the sender domain extracted from
+    # the email metadata. Non-fatal if TI sources are unavailable.
+    - id: "step-02"
+      name: "Enrich Sender Domain"
+      description: >
+        Query threat intelligence sources for reputation data on the
+        sender's email domain. Checks VirusTotal for known malicious
+        associations and AbuseIPDB for abuse reports. Results include
+        a risk score (0-100) and categorization data.
+      action: "check_reputation"
+      executor: "threat_intel"
+      parameters:
+        indicator_type: "domain"
+        indicator_value: "{{ steps.step-01.output.sender.domain }}"
+        sources:
+          - "virustotal"
+          - "abuseipdb"
+        include_whois: true
+      depends_on:
+        - "step-01"
+      on_error: "continue"
+      timeout: 45
+
+    # Step 3: Analyze any attachments found in the email.
+    # Runs after step-01 (needs the attachment list). Can run in
+    # parallel with step-02 since they share the same dependency
+    # but do not depend on each other.
+    - id: "step-03"
+      name: "Analyze Attachments"
+      description: >
+        Perform static analysis on all attachments extracted from the
+        phishing email. Calculates file hashes (MD5, SHA256), checks
+        file type mismatches (e.g., .pdf.exe), and queries known
+        malware databases. Does not execute files or perform dynamic
+        analysis at this level.
+      action: "enrich_ioc"
+      executor: "sandbox"
+      parameters:
+        files: "{{ steps.step-01.output.attachments }}"
+        analysis_type: "static"
+        hash_algorithms:
+          - "md5"
+          - "sha256"
+        check_file_type_mismatch: true
+      depends_on:
+        - "step-01"
+      on_error: "continue"
+      timeout: 60
+
+    # Step 4: Create an investigation ticket consolidating all findings.
+    # Runs after both step-02 and step-03 complete so the ticket
+    # includes enrichment results and attachment analysis.
+    - id: "step-04"
+      name: "Create Investigation Ticket"
+      description: >
+        Create a SOC investigation ticket in the ticketing system with
+        all collected findings. The ticket includes email metadata,
+        sender reputation scores, and attachment analysis results.
+        Assigned to the current analyst for manual review and disposition.
+      action: "create_ticket"
+      executor: "jira"
+      parameters:
+        project: "SOC"
+        issue_type: "Investigation"
+        summary: "Phishing Investigation: {{ alert.email.subject | default: Unknown Subject }}"
+        description: |
+          ## Phishing Email Investigation
+
+          **Triggered by:** {{ alert.rule.name | default: Manual submission }}
+          **Analyst:** {{ context.analyst_email | default: unassigned }}
+          **Execution ID:** {{ context.execution_id }}
+
+          ---
+
+          ### Email Metadata
+          - **Sender:** {{ steps.step-01.output.sender.address }}
+          - **Recipients:** {{ steps.step-01.output.recipients }}
+          - **Subject:** {{ steps.step-01.output.subject }}
+          - **Received:** {{ steps.step-01.output.received_timestamps }}
+
+          ### Sender Reputation
+          - **Domain:** {{ steps.step-01.output.sender.domain }}
+          - **Risk Score:** {{ steps.step-02.output.risk_score | default: N/A }}/100
+          - **Categories:** {{ steps.step-02.output.categories | default: unavailable }}
+
+          ### Attachment Analysis
+          - **File Count:** {{ steps.step-03.output.file_count | default: 0 }}
+          - **Malicious Indicators:** {{ steps.step-03.output.malicious_count | default: N/A }}
+          - **File Type Mismatches:** {{ steps.step-03.output.type_mismatch_count | default: 0 }}
+
+          ---
+
+          **Recommended Actions:**
+          1. Review sender reputation and WHOIS data
+          2. Inspect attachment hashes against internal threat intel
+          3. Check for other recipients who received the same email
+          4. Determine if any recipients clicked links or opened attachments
+          5. Escalate to Tier 2 if risk score > 70 or malicious attachments found
+        priority: "{{ alert.event.severity > 80 ? 'High' : 'Medium' }}"
+        labels:
+          - "phishing"
+          - "automated-triage"
+          - "T1566.001"
+        assignee: "{{ context.analyst_email | default: unassigned }}"
+      depends_on:
+        - "step-02"
+        - "step-03"
+      on_error: "continue"
+      timeout: 30

