@@ -1,0 +1,523 @@
+# RunbookPilot Reference Playbook: L2 Cobalt Strike C2 Beaconing Response
+# Schema Version: 1.0
+# Automation Level: L2 (Simulation Mode)
+#
+# This playbook automates the full investigation and response to Cobalt
+# Strike C2 beaconing activity. At L2 in v1, all impactful actions
+# (domain blocking, host isolation, process killing) run in SIMULATION
+# mode -- they are validated, logged, and reported but NOT actually
+# executed against production systems. Read-only steps (SIEM queries,
+# reputation checks, EDR data retrieval) execute normally.
+#
+# All simulated actions require approval and include rollback definitions.
+#
+# MITRE ATT&CK: T1071.001 - Application Layer Protocol: Web Protocols
+# Reference: https://attack.mitre.org/techniques/T1071/001/
+
+runbook:
+  id: "d8e9f0a1-b2c3-4d5e-6f7a-8b9c0d1e2f3a"
+  version: "1.0"
+
+  metadata:
+    name: "T1071.001 - Cobalt Strike C2 Beaconing Response"
+    description: >
+      L2 simulation playbook for responding to Cobalt Strike command-and-
+      control beaconing over HTTP/HTTPS. Performs comprehensive investigation
+      including SIEM beacon pattern analysis, C2 domain/IP reputation checks,
+      network traffic capture, and EDR process tree retrieval. Impactful
+      response actions (blocking C2 domains, isolating the beaconing host,
+      capturing memory, and killing the beacon process) run in simulation
+      mode to validate the response plan without impacting production.
+      All simulated actions require approval and include rollback definitions.
+      Designed for SOC teams evaluating automated response capabilities
+      before promoting actions to production execution.
+    author: "security-team@example.com"
+    created: "2026-02-11T00:00:00Z"
+    updated: "2026-02-11T00:00:00Z"
+    tags:
+      - "command-and-control"
+      - "cobalt-strike"
+      - "c2-beaconing"
+      - "simulation"
+      - "incident-response"
+      - "windows"
+      - "linux"
+    references:
+      - "https://attack.mitre.org/techniques/T1071/001/"
+      - "https://www.mandiant.com/resources/blog/defining-cobalt-strike-components"
+      - "https://thedfirreport.com/tag/cobalt-strike/"
+      - "https://blog.talosintelligence.com/cobalt-strike-a-defenders-guide/"
+
+  triggers:
+    detection_sources:
+      - "sigma"
+      - "siem_correlation"
+      - "edr_alert"
+    mitre_techniques:
+      - "T1071.001"
+    platforms:
+      - "windows"
+      - "linux"
+    severity:
+      - "high"
+      - "critical"
+
+  config:
+    automation_level: "L2"
+    max_execution_time: 1200
+    requires_approval: true
+    approval_timeout: 3600
+    rollback_on_failure: true
+
+  steps:
+    # Step 1: Query SIEM for C2 beacon patterns.
+    # Looks for the periodic HTTP/HTTPS callback pattern characteristic
+    # of Cobalt Strike beacons (regular intervals with jitter).
+    - id: "step-01"
+      name: "Query SIEM for C2 Beacon Patterns"
+      description: >
+        Search the SIEM for network events matching Cobalt Strike C2
+        beacon patterns. Looks for periodic HTTP/HTTPS connections to
+        the suspected C2 domain/IP with consistent intervals (typically
+        60s default sleep with configurable jitter). Identifies the
+        beacon's callback frequency, URI patterns, User-Agent strings,
+        and any associated Suricata/Snort IDS signatures. Covers a
+        24-hour window to establish the beaconing timeline.
+      action: "query_siem"
+      executor: "siem"
+      parameters:
+        query: >
+          (destination.domain:"{{ alert.destination.domain | default: * }}" OR
+           destination.ip:"{{ alert.destination.ip }}") AND
+          (event.category:"network" OR event.category:"intrusion_detection") AND
+          source.ip:"{{ alert.source.ip | default: alert.host.ip }}"
+        time_range: "24h"
+        max_results: 500
+        fields:
+          - "@timestamp"
+          - "source.ip"
+          - "destination.ip"
+          - "destination.domain"
+          - "destination.port"
+          - "url.path"
+          - "user_agent.original"
+          - "http.response.status_code"
+          - "network.bytes"
+          - "event.action"
+          - "rule.name"
+          - "suricata.eve.alert.signature"
+        aggregations:
+          - type: "date_histogram"
+            field: "@timestamp"
+            interval: "1m"
+          - type: "terms"
+            field: "url.path"
+      on_error: "halt"
+      timeout: 60
+
+    # Step 2: Check C2 domain/IP reputation.
+    # Runs after step-01 confirms the beaconing pattern. Queries
+    # multiple threat intel sources including C2 tracker databases.
+    - id: "step-02"
+      name: "Check C2 Domain/IP Reputation"
+      description: >
+        Submit the suspected C2 domain and IP address to threat
+        intelligence services for reputation analysis. Queries
+        VirusTotal, AbuseIPDB, URLhaus, and C2 tracker databases.
+        Checks for known Cobalt Strike team server indicators,
+        JARM hash matches, and TLS certificate fingerprints
+        associated with Cobalt Strike infrastructure. A positive
+        match in C2 tracker databases provides high-confidence
+        confirmation of malicious C2 infrastructure.
+      action: "check_reputation"
+      executor: "threat_intel"
+      parameters:
+        indicators:
+          - type: "domain"
+            value: "{{ alert.destination.domain | default: unknown }}"
+          - type: "ip"
+            value: "{{ alert.destination.ip }}"
+        sources:
+          - "virustotal"
+          - "abuseipdb"
+          - "urlhaus"
+          - "c2_tracker"
+        include_whois: true
+        include_ssl_certificate: true
+        include_jarm_hash: true
+        include_dns_history: true
+      depends_on:
+        - "step-01"
+      on_error: "continue"
+      timeout: 60
+
+    # Step 3: Capture network traffic for forensic analysis.
+    # Runs after step-01. Captures a PCAP of traffic to/from the
+    # C2 IP to support deep packet inspection and beacon decoding.
+    - id: "step-03"
+      name: "Capture Network Traffic"
+      description: >
+        Capture network traffic between the beaconing host and the
+        suspected C2 infrastructure. Collects a PCAP sample for
+        deep packet inspection, beacon payload extraction, and
+        encrypted channel analysis. Also captures current network
+        connections from the host to identify any additional C2
+        channels or lateral movement activity.
+      action: "collect_network_traffic"
+      executor: "network"
+      parameters:
+        host: "{{ alert.host.name }}"
+        capture_filter: "host {{ alert.destination.ip }}"
+        capture_duration: 120
+        max_capture_size_mb: 50
+        include_connection_list: true
+        include_dns_queries: true
+        output_format: "pcap"
+      depends_on:
+        - "step-01"
+      on_error: "continue"
+      timeout: 180
+
+    # Step 4: Retrieve EDR process tree for the beaconing process.
+    # Runs after step-01. Identifies the process responsible for
+    # the C2 callbacks and its full execution chain.
+    - id: "step-04"
+      name: "Retrieve Beaconing Process Tree"
+      description: >
+        Query the EDR for the full process tree of the process
+        generating the C2 beacon callbacks. Identifies the beacon
+        payload (often injected into legitimate processes like
+        rundll32.exe, svchost.exe, or dllhost.exe), the initial
+        loader process, and any child processes spawned by the
+        beacon (post-exploitation commands). Captures command lines,
+        loaded modules, and injected thread indicators.
+      action: "retrieve_edr_data"
+      executor: "edr"
+      parameters:
+        host: "{{ alert.host.name }}"
+        query_type: "process_tree"
+        process_id: "{{ alert.process.pid | default: null }}"
+        network_filter:
+          destination_ip: "{{ alert.destination.ip }}"
+          destination_port: "{{ alert.destination.port | default: 443 }}"
+        include_children: true
+        include_grandparent: true
+        include_loaded_modules: true
+        include_injected_threads: true
+        fields:
+          - "process.name"
+          - "process.pid"
+          - "process.command_line"
+          - "process.executable"
+          - "process.parent.name"
+          - "process.parent.command_line"
+          - "process.injected_thread"
+          - "dll.name"
+          - "dll.path"
+          - "user.name"
+          - "user.domain"
+          - "process.start"
+        time_range: "24h"
+      depends_on:
+        - "step-01"
+      on_error: "continue"
+      timeout: 60
+
+    # Step 5: Block C2 domain at the firewall (SIMULATED at L2).
+    # Depends on step-02 for reputation confirmation. This is the
+    # first impactful action -- at L2 it runs in simulation mode.
+    - id: "step-05"
+      name: "Block C2 Domain at Firewall"
+      description: >
+        Block the Cobalt Strike C2 domain at the perimeter firewall
+        and DNS sinkhole to prevent all hosts on the network from
+        reaching the C2 infrastructure. SIMULATED AT L2: this action
+        is validated and logged but NOT executed against the firewall.
+        The simulation verifies that the firewall adapter is reachable,
+        the domain format is valid, and the block rule can be
+        constructed. A rollback action is defined to unblock the domain
+        if it was blocked in error.
+      action: "block_domain"
+      executor: "firewall"
+      parameters:
+        domain: "{{ alert.destination.domain | default: unknown }}"
+        associated_ips:
+          - "{{ alert.destination.ip }}"
+        block_type: "dns_sinkhole_and_firewall"
+        rule_name: "CS-C2-Block-{{ context.execution_id }}"
+        reason: "Cobalt Strike C2 domain - T1071.001 - Execution ID {{ context.execution_id }}"
+        expiry: "72h"
+      approval_required: true
+      rollback:
+        action: "unblock_domain"
+        executor: "firewall"
+        parameters:
+          domain: "{{ alert.destination.domain | default: unknown }}"
+          rule_name: "CS-C2-Block-{{ context.execution_id }}"
+          reason: "Rollback - C2 domain block removed per analyst decision"
+        timeout: 60
+        on_error: "halt"
+      depends_on:
+        - "step-02"
+      on_error: "continue"
+      timeout: 90
+
+    # Step 6: Isolate beaconing host (SIMULATED at L2).
+    # Depends on steps 03 and 04 for evidence collection before
+    # isolation cuts network access. Includes rollback to restore
+    # connectivity.
+    - id: "step-06"
+      name: "Isolate Beaconing Host"
+      description: >
+        Isolate the host running the Cobalt Strike beacon from the
+        network to sever the C2 channel and prevent lateral movement
+        or data exfiltration. Only the EDR management channel remains
+        active for continued investigation. SIMULATED AT L2: the
+        isolation command is validated and logged but NOT applied.
+        The simulation confirms the EDR agent is responsive, the host
+        ID is valid, and the isolation policy can be applied. A rollback
+        action restores full connectivity if needed.
+      action: "isolate_host"
+      executor: "edr"
+      parameters:
+        host: "{{ alert.host.name }}"
+        host_id: "{{ alert.host.id }}"
+        isolation_type: "full"
+        allow_edr_communication: true
+        reason: "Cobalt Strike C2 beaconing detected - T1071.001 - Execution ID {{ context.execution_id }}"
+      approval_required: true
+      rollback:
+        action: "restore_connectivity"
+        executor: "edr"
+        parameters:
+          host: "{{ alert.host.name }}"
+          host_id: "{{ alert.host.id }}"
+          reason: "Rollback - host connectivity restored per analyst decision"
+        timeout: 60
+        on_error: "halt"
+      depends_on:
+        - "step-03"
+        - "step-04"
+      on_error: "halt"
+      timeout: 120
+
+    # Step 7: Capture memory dump for forensic analysis.
+    # Depends on step-06 (host isolation) to ensure the beacon
+    # cannot wipe artifacts while memory is being captured.
+    - id: "step-07"
+      name: "Capture Memory Dump"
+      description: >
+        Capture a full memory dump of the beaconing host for offline
+        forensic analysis. The memory image can be analyzed with
+        Volatility or similar tools to extract the Cobalt Strike
+        beacon configuration (C2 URLs, sleep time, watermark, public
+        key), identify injected code in process memory, and recover
+        any credentials or tokens cached by the beacon. Runs after
+        host isolation to preserve volatile evidence.
+      action: "snapshot_memory"
+      executor: "edr"
+      parameters:
+        host: "{{ alert.host.name }}"
+        host_id: "{{ alert.host.id }}"
+        dump_type: "full"
+        target_process_id: "{{ steps.step-04.output.beacon_pid | default: null }}"
+        output_path: "/forensics/{{ context.execution_id }}/memory_dump"
+        compress: true
+      depends_on:
+        - "step-06"
+      on_error: "continue"
+      timeout: 300
+
+    # Step 8: Kill the beaconing process (SIMULATED at L2).
+    # Depends on step-07 (memory capture) to ensure forensic
+    # evidence is preserved before the process is terminated.
+    - id: "step-08"
+      name: "Kill Beaconing Process"
+      description: >
+        Terminate the process hosting the Cobalt Strike beacon to
+        immediately sever the C2 channel on the endpoint. SIMULATED
+        AT L2: the kill command is validated and logged but NOT
+        executed. The simulation confirms the target process ID is
+        valid and the EDR agent has the capability to terminate it.
+        Note: killing the process alone is insufficient for full
+        remediation as persistence mechanisms may respawn it.
+      action: "kill_process"
+      executor: "edr"
+      parameters:
+        host: "{{ alert.host.name }}"
+        host_id: "{{ alert.host.id }}"
+        process_id: "{{ steps.step-04.output.beacon_pid | default: alert.process.pid }}"
+        process_name: "{{ steps.step-04.output.beacon_process_name | default: unknown }}"
+        force: true
+        reason: "Cobalt Strike beacon process - T1071.001 - Execution ID {{ context.execution_id }}"
+      depends_on:
+        - "step-07"
+      on_error: "continue"
+      timeout: 30
+
+    # Step 9: Run full EDR scan on the host.
+    # Depends on step-08. Scans for additional malware, persistence
+    # mechanisms, and Cobalt Strike artifacts on the host.
+    - id: "step-09"
+      name: "Run Full EDR Scan"
+      description: >
+        Initiate a comprehensive EDR scan on the compromised host to
+        detect additional Cobalt Strike artifacts, persistence
+        mechanisms (scheduled tasks, services, registry run keys),
+        dropped tools, and other malware that may have been deployed
+        via the beacon. The scan covers all disk volumes, running
+        processes, loaded modules, and common persistence locations.
+      action: "start_edr_scan"
+      executor: "edr"
+      parameters:
+        host: "{{ alert.host.name }}"
+        host_id: "{{ alert.host.id }}"
+        scan_type: "full"
+        scan_targets:
+          - "processes"
+          - "modules"
+          - "startup_items"
+          - "scheduled_tasks"
+          - "services"
+          - "registry_autoruns"
+          - "disk_full"
+        detect_cobalt_strike: true
+        priority: "high"
+      depends_on:
+        - "step-08"
+      on_error: "continue"
+      timeout: 300
+
+    # Step 10: Create high-priority incident ticket.
+    # Depends on all previous steps to consolidate findings.
+    - id: "step-10"
+      name: "Create High-Priority Incident Ticket"
+      description: >
+        Create a high-priority incident ticket consolidating all
+        investigation and response findings. Includes the beacon
+        pattern analysis, C2 infrastructure reputation, network
+        capture details, process tree analysis, simulation results
+        for blocked actions, memory dump location, and EDR scan
+        status. This ticket is the authoritative record of the
+        incident and drives the remediation workflow.
+      action: "create_ticket"
+      executor: "jira"
+      parameters:
+        project: "SOC"
+        issue_type: "Incident"
+        summary: "Cobalt Strike C2: {{ alert.host.name }} -> {{ alert.destination.domain | default: alert.destination.ip }}"
+        description: |
+          ## Cobalt Strike C2 Beaconing Incident
+
+          **Alert Rule:** {{ alert.rule.name | default: Sigma/Suricata T1071.001 }}
+          **Severity:** {{ alert.event.severity | default: critical }}
+          **Analyst:** {{ context.analyst_email | default: unassigned }}
+          **Execution ID:** {{ context.execution_id }}
+          **Automation Level:** L2 (Simulation)
+
+          ---
+
+          ### C2 Infrastructure
+          - **C2 Domain:** {{ alert.destination.domain | default: N/A }}
+          - **C2 IP:** {{ alert.destination.ip }}
+          - **C2 Port:** {{ alert.destination.port | default: 443 }}
+          - **VT Score:** {{ steps.step-02.output.vt_score | default: N/A }}
+          - **C2 Tracker Match:** {{ steps.step-02.output.c2_tracker_match | default: N/A }}
+          - **JARM Hash:** {{ steps.step-02.output.jarm_hash | default: N/A }}
+
+          ### Beacon Analysis (from SIEM)
+          - **Beacon Count (24h):** {{ steps.step-01.output.total_hits | default: N/A }}
+          - **Callback Interval:** {{ steps.step-01.output.avg_interval | default: N/A }}
+          - **URI Patterns:** {{ steps.step-01.output.uri_patterns | default: N/A }}
+          - **User-Agent:** {{ steps.step-01.output.user_agent | default: N/A }}
+
+          ### Beaconing Host
+          - **Hostname:** {{ alert.host.name }}
+          - **Host IP:** {{ alert.host.ip }}
+          - **OS:** {{ alert.host.os.name | default: unknown }}
+          - **Beacon Process:** {{ steps.step-04.output.beacon_process_name | default: N/A }} (PID {{ steps.step-04.output.beacon_pid | default: N/A }})
+          - **Beacon Command Line:** {{ steps.step-04.output.beacon_command_line | default: N/A }}
+          - **Injected Thread Detected:** {{ steps.step-04.output.injected_thread_detected | default: N/A }}
+          - **Parent Process:** {{ steps.step-04.output.parent_process | default: N/A }}
+          - **User Context:** {{ steps.step-04.output.user | default: N/A }}
+
+          ### Network Capture
+          - **PCAP Location:** {{ steps.step-03.output.pcap_path | default: N/A }}
+          - **Capture Duration:** {{ steps.step-03.output.duration | default: N/A }}
+          - **DNS Queries to C2:** {{ steps.step-03.output.dns_query_count | default: N/A }}
+
+          ### Simulated Response Actions (L2)
+          - **C2 Domain Block:** {{ steps.step-05.output.simulation_status | default: pending }} ({{ alert.destination.domain | default: N/A }})
+          - **Host Isolation:** {{ steps.step-06.output.simulation_status | default: pending }}
+          - **Process Kill:** {{ steps.step-08.output.simulation_status | default: pending }}
+
+          ### Forensics
+          - **Memory Dump:** {{ steps.step-07.output.dump_path | default: N/A }} ({{ steps.step-07.output.dump_size | default: N/A }})
+          - **EDR Scan Status:** {{ steps.step-09.output.scan_status | default: pending }}
+          - **EDR Scan Findings:** {{ steps.step-09.output.findings_count | default: N/A }}
+
+          ---
+
+          **Immediate Actions Required:**
+          1. Review simulation results and approve for production execution if confirmed malicious
+          2. Analyze PCAP for beacon configuration extraction
+          3. Analyze memory dump with Volatility for beacon config and credentials
+          4. Identify initial access vector (how Cobalt Strike was delivered)
+          5. Hunt for the same C2 indicators across all endpoints
+          6. Check for data exfiltration via the C2 channel
+          7. Identify and remediate persistence mechanisms
+          8. Reset credentials for all accounts active on the compromised host
+          9. Notify management if data exfiltration is confirmed
+
+          **Simulation Note:** All impactful actions ran in simulation mode.
+          Promote to production execution after IR team review and approval.
+        priority: "Critical"
+        labels:
+          - "command-and-control"
+          - "cobalt-strike"
+          - "T1071.001"
+          - "simulation"
+          - "incident-response"
+          - "automated-response"
+        assignee: "{{ context.analyst_email | default: unassigned }}"
+      depends_on:
+        - "step-05"
+        - "step-06"
+        - "step-07"
+        - "step-08"
+        - "step-09"
+      on_error: "continue"
+      timeout: 30
+
+    # Step 11: Page incident response team.
+    # Depends on step-10 so the page includes the ticket link.
+    # Cobalt Strike C2 always warrants an IR team notification.
+    - id: "step-11"
+      name: "Page Incident Response Team"
+      description: >
+        Send a critical page to the incident response on-call team.
+        Cobalt Strike C2 beaconing represents a confirmed compromise
+        that requires immediate IR engagement. The page includes the
+        incident summary, affected host, C2 infrastructure details,
+        and a link to the incident ticket. This ensures the IR team
+        is aware and can begin full-scope investigation and remediation.
+      action: "notify_oncall"
+      executor: "notification"
+      parameters:
+        service: "incident-response"
+        urgency: "critical"
+        message: >
+          CRITICAL: Cobalt Strike C2 beaconing detected.
+          Host: {{ alert.host.name }} ({{ alert.host.ip }}).
+          C2: {{ alert.destination.domain | default: alert.destination.ip }}:{{ alert.destination.port | default: 443 }}.
+          Beacon process: {{ steps.step-04.output.beacon_process_name | default: unknown }}.
+          Simulated actions: domain block, host isolation, process kill.
+          Memory dump captured: {{ steps.step-07.output.dump_path | default: pending }}.
+          Ticket: {{ steps.step-10.output.ticket_url }}.
+          Immediate IR engagement required.
+        include_runbook_summary: true
+        escalation_policy: "critical-security-incident"
+      depends_on:
+        - "step-10"
+      on_error: "continue"
+      timeout: 15

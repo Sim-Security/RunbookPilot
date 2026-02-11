@@ -1,0 +1,357 @@
+# RunbookPilot Reference Playbook: L1 WMI Lateral Movement Response
+# Schema Version: 1.0
+# Automation Level: L1 (Semi-Automated)
+#
+# This playbook automates the investigation and initial containment of
+# WMI-based lateral movement. At L1, read-only steps (EDR queries, SIEM
+# searches, reputation checks, network traffic collection) execute
+# automatically. The containment action (host isolation) requires
+# explicit analyst approval before execution. A rollback is defined
+# to restore connectivity if isolation was applied to a false positive.
+#
+# MITRE ATT&CK: T1047 - Windows Management Instrumentation
+# Reference: https://attack.mitre.org/techniques/T1047/
+
+runbook:
+  id: "c4d5e6f7-8a9b-4c0d-1e2f-3a4b5c6d7e8f"
+  version: "1.0"
+
+  metadata:
+    name: "T1047 - WMI Lateral Movement Response"
+    description: >
+      L1 semi-automated playbook for responding to WMI-based lateral
+      movement. Automatically collects EDR process trees, queries the
+      SIEM for lateral movement patterns, enriches source and destination
+      IPs, and captures network connections. The containment step
+      (isolating the compromised host) requires analyst approval and
+      includes a rollback to restore connectivity if the detection turns
+      out to be a false positive. A ticket is created and the on-call
+      engineer is paged when severity is critical.
+    author: "security-team@example.com"
+    created: "2026-02-11T00:00:00Z"
+    updated: "2026-02-11T00:00:00Z"
+    tags:
+      - "lateral-movement"
+      - "wmi"
+      - "execution"
+      - "containment"
+      - "windows"
+    references:
+      - "https://attack.mitre.org/techniques/T1047/"
+      - "https://www.elastic.co/guide/en/security/current/windows-management-instrumentation.html"
+      - "https://redcanary.com/threat-detection-report/techniques/windows-management-instrumentation/"
+
+  triggers:
+    detection_sources:
+      - "sigma"
+      - "edr_alert"
+      - "siem_correlation"
+    mitre_techniques:
+      - "T1047"
+    platforms:
+      - "windows"
+    severity:
+      - "medium"
+      - "high"
+      - "critical"
+
+  config:
+    automation_level: "L1"
+    max_execution_time: 900
+    requires_approval: true
+    approval_timeout: 1800
+    rollback_on_failure: true
+
+  steps:
+    # Step 1: Retrieve EDR data for the WMI process tree.
+    # Auto-executes at L1. Pulls the full process lineage around
+    # wmiprvse.exe or wmic.exe to understand what was spawned via WMI.
+    - id: "step-01"
+      name: "Retrieve WMI Process Tree from EDR"
+      description: >
+        Query the EDR for the complete process tree surrounding the WMI
+        execution event. Focuses on wmiprvse.exe child processes and
+        wmic.exe invocations, capturing command-line arguments, parent
+        processes, user context, and network connections initiated by
+        the spawned processes. This reveals what commands were executed
+        remotely via WMI and whether they represent legitimate admin
+        activity or attacker lateral movement.
+      action: "retrieve_edr_data"
+      executor: "edr"
+      parameters:
+        host: "{{ alert.host.name }}"
+        query_type: "process_tree"
+        process_name: "wmiprvse.exe"
+        include_children: true
+        include_network_connections: true
+        fields:
+          - "process.name"
+          - "process.pid"
+          - "process.command_line"
+          - "process.executable"
+          - "process.parent.name"
+          - "process.parent.command_line"
+          - "user.name"
+          - "user.domain"
+          - "source.ip"
+          - "destination.ip"
+          - "destination.port"
+          - "network.direction"
+          - "process.start"
+        time_range: "2h"
+      on_error: "halt"
+      timeout: 60
+
+    # Step 2: Query SIEM for lateral movement indicators.
+    # Auto-executes at L1. Searches for WMI-related events, remote
+    # service creation, and suspicious authentication patterns that
+    # correlate with the initial detection.
+    - id: "step-02"
+      name: "Query SIEM for Lateral Movement Indicators"
+      description: >
+        Search the SIEM for events correlated with WMI lateral movement
+        on both the source and destination hosts. Looks for remote WMI
+        connections (DCOM TCP/135), pass-the-hash authentication, remote
+        service creation, and suspicious logon events (Type 3 and Type 10).
+        Covers the two-hour window around the alert to capture the full
+        lateral movement chain.
+      action: "query_siem"
+      executor: "siem"
+      parameters:
+        query: >
+          (host.name:"{{ alert.host.name }}" OR
+           source.ip:"{{ alert.source.ip }}" OR
+           destination.ip:"{{ alert.destination.ip | default: * }}") AND
+          (process.name:"wmiprvse.exe" OR process.name:"wmic.exe" OR
+           event.action:"logon-success" OR event.action:"service-installed" OR
+           destination.port:135) AND
+          event.category:("process" OR "authentication" OR "network")
+        time_range: "2h"
+        max_results: 200
+        fields:
+          - "@timestamp"
+          - "event.action"
+          - "event.category"
+          - "host.name"
+          - "source.ip"
+          - "destination.ip"
+          - "destination.port"
+          - "process.name"
+          - "process.command_line"
+          - "user.name"
+          - "winlog.logon.type"
+      depends_on:
+        - "step-01"
+      on_error: "continue"
+      timeout: 45
+
+    # Step 3: Check reputation of source and destination IPs.
+    # Auto-executes at L1. Submits both the source (attacker) and
+    # destination (target) IPs to VirusTotal and AbuseIPDB.
+    - id: "step-03"
+      name: "Check IP Reputation"
+      description: >
+        Submit the source IP (originating the WMI connection) and the
+        destination IP (target host) to threat intelligence services
+        for reputation analysis. Checks VirusTotal for malicious
+        associations and AbuseIPDB for abuse reports. If the source IP
+        is an internal address, this helps determine if it is a known
+        compromised host. External source IPs with high abuse scores
+        indicate a compromised perimeter.
+      action: "check_reputation"
+      executor: "threat_intel"
+      parameters:
+        indicators:
+          - type: "ip"
+            value: "{{ alert.source.ip }}"
+          - type: "ip"
+            value: "{{ alert.destination.ip | default: alert.host.ip }}"
+        sources:
+          - "virustotal"
+          - "abuseipdb"
+        include_whois: true
+        include_geo: true
+      depends_on:
+        - "step-01"
+      on_error: "continue"
+      timeout: 45
+
+    # Step 4: Collect network traffic from the affected host.
+    # Auto-executes at L1. Captures active network connections to
+    # identify other hosts the attacker may have pivoted to.
+    - id: "step-04"
+      name: "Collect Network Connections"
+      description: >
+        Collect current and recent network connections from the
+        compromised host via the EDR agent. Focuses on outbound
+        connections to other internal hosts (potential further lateral
+        movement), connections on common WMI/DCOM ports (135, 445,
+        5985-5986), and any connections to external IP addresses.
+        This helps map the scope of the lateral movement campaign.
+      action: "collect_network_traffic"
+      executor: "edr"
+      parameters:
+        host: "{{ alert.host.name }}"
+        capture_type: "connection_list"
+        include_listening_ports: true
+        filter_ports:
+          - 135
+          - 445
+          - 5985
+          - 5986
+        include_process_info: true
+        time_range: "2h"
+      depends_on:
+        - "step-01"
+      on_error: "continue"
+      timeout: 60
+
+    # Step 5: Isolate the compromised host.
+    # THIS IS THE L1 ACTION: requires explicit analyst approval before
+    # execution. The analyst reviews all preceding evidence and decides
+    # whether isolation is warranted. A rollback is defined to restore
+    # connectivity if the detection is a false positive.
+    - id: "step-05"
+      name: "Isolate Compromised Host"
+      description: >
+        Isolate the compromised host from the network to prevent further
+        lateral movement. This action cuts all network connectivity
+        except the EDR management channel, stopping the attacker from
+        pivoting to additional hosts. REQUIRES ANALYST APPROVAL because
+        isolation disrupts business operations for the affected user.
+        A rollback action is available to restore full connectivity if
+        the detection is determined to be a false positive.
+      action: "isolate_host"
+      executor: "edr"
+      parameters:
+        host: "{{ alert.host.name }}"
+        host_id: "{{ alert.host.id }}"
+        isolation_type: "full"
+        allow_edr_communication: true
+        reason: "WMI lateral movement detected - T1047 - Execution ID {{ context.execution_id }}"
+      approval_required: true
+      rollback:
+        action: "restore_connectivity"
+        executor: "edr"
+        parameters:
+          host: "{{ alert.host.name }}"
+          host_id: "{{ alert.host.id }}"
+          reason: "False positive - restoring connectivity per analyst decision"
+        timeout: 60
+        on_error: "halt"
+      depends_on:
+        - "step-02"
+        - "step-03"
+        - "step-04"
+      on_error: "halt"
+      timeout: 120
+
+    # Step 6: Create incident ticket with consolidated findings.
+    # Runs after approval/isolation step completes (regardless of
+    # whether isolation was approved or denied).
+    - id: "step-06"
+      name: "Create Incident Ticket"
+      description: >
+        Create an incident ticket in the ticketing system with all
+        investigation findings, including the EDR process tree, SIEM
+        correlation results, IP reputation data, network connection
+        map, and the isolation decision outcome. This ticket serves
+        as the single source of truth for the incident and tracks
+        follow-up remediation actions.
+      action: "create_ticket"
+      executor: "jira"
+      parameters:
+        project: "SOC"
+        issue_type: "Incident"
+        summary: "WMI Lateral Movement: {{ alert.source.ip }} -> {{ alert.host.name }}"
+        description: |
+          ## WMI Lateral Movement Incident
+
+          **Alert Rule:** {{ alert.rule.name | default: Sigma T1047 }}
+          **Severity:** {{ alert.event.severity | default: high }}
+          **Analyst:** {{ context.analyst_email | default: unassigned }}
+          **Execution ID:** {{ context.execution_id }}
+          **Automation Level:** L1 (Semi-Automated)
+
+          ---
+
+          ### Affected Hosts
+          - **Source Host:** {{ alert.source.ip }} (initiating WMI connection)
+          - **Target Host:** {{ alert.host.name }} ({{ alert.host.ip }})
+          - **Isolated:** {{ steps.step-05.output.isolated | default: pending }}
+
+          ### WMI Process Tree (from EDR)
+          - **WMI Provider Host Children:** {{ steps.step-01.output.child_count | default: N/A }}
+          - **Spawned Processes:** {{ steps.step-01.output.child_processes | default: N/A }}
+          - **Command Lines:** {{ steps.step-01.output.command_lines | default: N/A }}
+          - **User Context:** {{ steps.step-01.output.user.name }}@{{ steps.step-01.output.user.domain }}
+
+          ### SIEM Correlation
+          - **Related Events:** {{ steps.step-02.output.total_hits | default: 0 }}
+          - **Logon Types Observed:** {{ steps.step-02.output.logon_types | default: N/A }}
+          - **Other Targets:** {{ steps.step-02.output.other_targets | default: none identified }}
+
+          ### IP Reputation
+          - **Source IP ({{ alert.source.ip }}):** {{ steps.step-03.output.source_reputation | default: N/A }}
+          - **Target IP ({{ alert.host.ip }}):** {{ steps.step-03.output.target_reputation | default: N/A }}
+
+          ### Network Connections
+          - **Active Connections:** {{ steps.step-04.output.connection_count | default: N/A }}
+          - **Suspicious Connections:** {{ steps.step-04.output.suspicious_connections | default: none }}
+          - **Lateral Movement Indicators:** {{ steps.step-04.output.lateral_indicators | default: N/A }}
+
+          ### Containment
+          - **Host Isolation:** {{ steps.step-05.output.status | default: pending approval }}
+          - **Isolation Time:** {{ steps.step-05.output.isolated_at | default: N/A }}
+
+          ---
+
+          **Next Steps:**
+          1. Review WMI child processes for malicious intent
+          2. Determine if source host is compromised (check for initial access)
+          3. Identify all hosts the attacker touched via WMI
+          4. Reset credentials for affected user accounts
+          5. Hunt for persistence mechanisms on all affected hosts
+          6. Escalate to IR team if multiple hosts are compromised
+        priority: "{{ alert.event.severity >= 80 ? 'Critical' : 'High' }}"
+        labels:
+          - "lateral-movement"
+          - "wmi"
+          - "T1047"
+          - "containment"
+          - "automated-response"
+        assignee: "{{ context.analyst_email | default: unassigned }}"
+      depends_on:
+        - "step-05"
+      on_error: "continue"
+      timeout: 30
+
+    # Step 7: Page on-call engineer if severity is critical.
+    # Depends on step-06 so the notification includes the ticket link.
+    # Only fires when the alert severity is critical.
+    - id: "step-07"
+      name: "Page On-Call Engineer"
+      description: >
+        Send a high-urgency page to the on-call incident response
+        engineer when the alert severity is critical. Includes a
+        brief summary of the WMI lateral movement findings and a
+        link to the incident ticket for immediate review. This
+        ensures critical lateral movement incidents receive prompt
+        attention outside of normal business hours.
+      action: "notify_oncall"
+      executor: "notification"
+      parameters:
+        service: "soc-incident-response"
+        urgency: "critical"
+        message: >
+          CRITICAL: WMI Lateral Movement detected.
+          Source: {{ alert.source.ip }} -> Target: {{ alert.host.name }}.
+          Host isolation: {{ steps.step-05.output.status | default: pending }}.
+          Ticket: {{ steps.step-06.output.ticket_url }}.
+          Immediate review required.
+        include_runbook_summary: true
+      condition: "alert.event.severity === 'critical' || alert.event.severity >= 80"
+      depends_on:
+        - "step-06"
+      on_error: "continue"
+      timeout: 15
