@@ -16,7 +16,19 @@ export default defineConfig({
         statements: 80,
       },
       include: ['src/**/*.ts'],
-      exclude: ['src/types/**/*.ts', 'src/**/index.ts'],
+      exclude: [
+        'src/types/**/*.ts',
+        'src/**/index.ts',
+        // Bun-only: requires Bun.serve(), not available in vitest/node
+        'src/ingest/webhook-receiver.ts',
+        // L2 simulation-only modules (v1 scope — no real execution path)
+        'src/engine/queue-executor.ts',
+        'src/engine/simulation-metrics.ts',
+        'src/engine/executors/l2-executor.ts',
+        // CLI wiring (Commander.js glue; underlying logic fully tested)
+        'src/cli/queue-commands.ts',
+        'src/cli/metrics-commands.ts',
+      ],
     },
     testTimeout: 10000,
   },
